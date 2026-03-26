@@ -2,7 +2,7 @@ import os
 import asyncio
 import json
 import time
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 from scorer import CreditScorer
 from chains import get_default_chains, fetch_all_chains
@@ -59,10 +59,8 @@ def add_chain():
     name = data.get('name', '').strip()
     url = data.get('url', '').strip()
     api_key = data.get('api_key', '').strip()
-
     if not name or not url or not api_key:
         return jsonify({'error': 'name, url and api_key are required'}), 400
-
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('INSERT INTO custom_chains (name, url, api_key) VALUES (?, ?, ?)', (name, url, api_key))
@@ -108,60 +106,45 @@ def score():
     if row:
         cached_at = row[1]
         if time.time() - cached_at < 3600:
-            return jsonify(json.loads(row[0]))
+            return jsonify({'status': 'done', 'result': json.loads(row[0])})
 
-    def generate():
-        async def run():
-            # Get all chains
-            defaults = get_default_chains()
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute('SELECT id, name, url, api_key FROM custom_chains')
-            customs = [{'id': r[0], 'name': r[1], 'url': r[2], 'api_key': r[3]} for r in cur.fetchall()]
-            conn.close()
+    async def run():
+        defaults = get_default_chains()
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute('SELECT id, name, url, api_key FROM custom_chains')
+        customs = [{'id': r[0], 'name': r[1], 'url': r[2], 'api_key': r[3]} for r in cur.fetchall()]
+        conn.close()
 
-            all_chains = defaults + customs
-            chains_to_use = [ch for ch in all_chains if str(ch.get('id', ch.get('name'))) in [str(s) for s in selected_chain_ids]] if selected_chain_ids else defaults
+        all_chains = defaults + customs
+        chains_to_use = [ch for ch in all_chains if str(ch.get('id', ch.get('name'))) in [str(s) for s in selected_chain_ids]] if selected_chain_ids else defaults
 
-            yield f"data: {json.dumps({'status': 'fetching', 'message': 'Fetching on-chain data...'})}\n\n"
+        if is_solana_address(address):
+            chain_data = [await fetch_solana_data(address)]
+        else:
+            chain_data = await fetch_all_chains(address, chains_to_use)
 
-            # Solana address — only fetch Solana
-            if is_solana_address(address):
-                sol_data = await fetch_solana_data(address)
-                chain_data = [sol_data]
-            else:
-                chain_data = await fetch_all_chains(address, chains_to_use)
+        scorer = CreditScorer(os.environ.get('OG_PRIVATE_KEY'))
+        result = await scorer.score(address, chain_data)
 
-            yield f"data: {json.dumps({'status': 'scoring', 'message': 'Analyzing with OG TEE LLM...'})}\n\n"
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute('INSERT OR REPLACE INTO score_cache (address, result, cached_at) VALUES (?, ?, ?)',
+                   (cache_key, json.dumps(result), int(time.time())))
+        conn.commit()
+        conn.close()
 
-            scorer = CreditScorer(os.environ.get('OG_PRIVATE_KEY'))
-            result = await scorer.score(address, chain_data)
+        return result
 
-            # Cache result
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute('INSERT OR REPLACE INTO score_cache (address, result, cached_at) VALUES (?, ?, ?)',
-                       (cache_key, json.dumps(result), int(time.time())))
-            conn.commit()
-            conn.close()
-
-            yield f"data: {json.dumps({'status': 'done', 'result': result})}\n\n"
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            gen = run()
-            while True:
-                try:
-                    chunk = loop.run_until_complete(gen.__anext__())
-                    yield chunk
-                except StopAsyncIteration:
-                    break
-        finally:
-            loop.close()
-
-    return Response(stream_with_context(generate()), mimetype='text/event-stream',
-                   headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(run())
+        return jsonify({'status': 'done', 'result': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        loop.close()
 
 
 if __name__ == '__main__':

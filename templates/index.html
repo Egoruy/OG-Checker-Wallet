@@ -307,7 +307,7 @@ footer a { color: var(--purple); }
 <div class="topnav">
   <div class="container">
     <div class="topnav-inner">
-      <div class="logo">OpenGradient <span>Onchain Checker</span></div>
+      <div class="logo" onclick="resetPage()" style="cursor:pointer;">OpenGradient <span>Onchain Checker</span></div>
       <div class="nav-right">
         <span class="pill-badge">TEE verified</span>
         <span class="pill-badge">Cross-chain</span>
@@ -379,6 +379,16 @@ footer a { color: var(--purple); }
 <script>
 let chains = [];
 let selectedChains = new Set();
+
+function resetPage() {
+  document.getElementById('address').value = '';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('errorBar').style.display = 'none';
+  document.getElementById('statusBar').style.display = 'none';
+  document.getElementById('solana-chip').style.display = 'none';
+  selectedChains = new Set(chains.filter(c => !c.custom).map(c => String(c.id)));
+  renderChains();
+}
 
 function toggleTheme() {
   const html = document.documentElement;

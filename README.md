@@ -2,7 +2,7 @@
 
 An AI-powered cross-chain credit scoring tool for any wallet address. Powered by verifiable on-chain inference via the **OpenGradient SDK**.
 
-Live demo: **https://web-production-f67fe.up.railway.app/**
+Live demo: **https://opengradient-checkerwallet.up.railway.app/**
 
 ---
 

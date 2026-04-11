@@ -73,7 +73,7 @@ Return ONLY this JSON structure, no other text:
 SPAM_KEYWORDS = [
     'airdrop', 'voucher', 'reward', 'claim', 'free', 'gift', 'bonus',
     'visit', 'www.', 'http', '.com', '.live', '.top', '.io', 't.me',
-    'vip', 'bot', '$airdrop', '🎁', '✅', '⭐',
+    'vip', 'bot', '$airdrop',
 ]
 
 
@@ -100,16 +100,12 @@ def summarize_chain_data(chain_data):
         token_txs = chain.get('token_txs', [])
 
         if not txs and not token_txs:
-            # No activity — skip silently, not a negative
             continue
 
-        # Only outgoing txs for behavior
-        outgoing_txs = [tx for tx in txs if tx.get('from', '').lower() == chain.get('address', '').lower() or True]
         total_txs = len(txs)
         failed_txs = sum(1 for tx in txs if tx.get('isError') == '1')
         success_rate = ((total_txs - failed_txs) / total_txs * 100) if total_txs > 0 else 0
 
-        # Wallet age
         timestamps = [int(tx.get('timeStamp', 0)) for tx in txs if tx.get('timeStamp')]
         if timestamps:
             age_days = (time.time() - min(timestamps)) / 86400
@@ -118,11 +114,9 @@ def summarize_chain_data(chain_data):
             age_days = 0
             active_days = 0
 
-        # Unique contracts
         contracts = set(tx.get('to', '') for tx in txs if tx.get('to'))
         unique_contracts = len(contracts)
 
-        # Filter out spam tokens — only keep legit ones
         legit_tokens = set()
         for tx in token_txs:
             tname = tx.get('tokenName', '')
@@ -130,7 +124,6 @@ def summarize_chain_data(chain_data):
             if not is_spam_token(tname, tsym):
                 legit_tokens.add(tsym or tname)
 
-        # DeFi protocols
         defi_keywords = ['aave', 'uniswap', 'compound', 'curve', 'maker', 'balancer', 'sushi', '1inch', 'lido']
         protocols_found = []
         all_input_data = ' '.join(tx.get('functionName', '').lower() for tx in txs)
@@ -175,13 +168,34 @@ class CreditScorer:
             {"role": "user", "content": prompt},
         ]
 
-        result = await llm.chat(
-            model=og.TEE_LLM.CLAUDE_SONNET_4_6,
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.0,
-            x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL,
-        )
+        models_to_try = [
+            og.TEE_LLM.CLAUDE_SONNET_4_6,
+            og.TEE_LLM.CLAUDE_SONNET_4_5,
+            og.TEE_LLM.GPT_4_1_2025_04_14,
+            og.TEE_LLM.GEMINI_2_5_FLASH,
+        ]
+
+        result = None
+        last_error = None
+        for model in models_to_try:
+            try:
+                print(f"Trying model: {model}")
+                result = await llm.chat(
+                    model=model,
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.0,
+                    x402_settlement_mode=og.x402SettlementMode.INDIVIDUAL_FULL,
+                )
+                print(f"Success with model: {model}")
+                break
+            except Exception as e:
+                print(f"Model {model} failed: {e}")
+                last_error = e
+                continue
+
+        if result is None:
+            raise last_error
 
         raw = result.chat_output.get('content', '{}')
         payment_hash = getattr(result, 'payment_hash', None) or ''

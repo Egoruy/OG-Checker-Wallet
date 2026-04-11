@@ -163,7 +163,7 @@ class CreditScorer:
         llm = self.get_llm()
 
         try:
-            llm.ensure_opg_approval(opg_amount=5.0)
+            llm.ensure_opg_approval(min_allowance=5.0)
         except Exception as e:
             print(f"Warning: OPG approval check failed: {e}")
 
